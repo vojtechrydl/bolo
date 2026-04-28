@@ -8,8 +8,53 @@
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text x='0' y='14' font-size='14'>🐶</text></svg>">
 </head>
 <body>
-  <canvas id="game" width="320" height="240"></canvas>
-  <div class="hint">WASD/šipky · MEZERA = schovat se · M = zvuk</div>
+  <div id="frame">
+    <canvas id="game" width="480" height="360"></canvas>
+
+    <!-- HUD: skore + brisko -->
+    <div id="hud">
+      <div class="hud-left">
+        <div class="hud-label">Skóre</div>
+        <div class="hud-value" id="score">00000</div>
+      </div>
+      <div class="hud-center">
+        <div class="hud-label">Místnost</div>
+        <div class="hud-value-mid" id="room-name">Kuchyň</div>
+      </div>
+      <div class="hud-right">
+        <div class="hud-label">Bolení bříška</div>
+        <div class="tummy-bar"><div class="tummy-fill" id="tummy-fill"></div></div>
+      </div>
+    </div>
+
+    <!-- Hint pro schování -->
+    <div id="hide-hint" class="hidden">Stiskni <kbd>Mezerník</kbd> a schovej se</div>
+    <div id="hidden-msg" class="hidden">Schovaný pod nábytkem · <kbd>Mezerník</kbd> = ven</div>
+
+    <!-- Title overlay -->
+    <div id="title-screen" class="overlay">
+      <h1>Bolo Eats</h1>
+      <p class="subtitle">— příběh hladového labradoodla —</p>
+      <button class="big-btn" id="start-btn">Spustit hru</button>
+      <div class="controls">
+        <div><kbd>WASD</kbd>/<kbd>↑↓←→</kbd> pohyb · <kbd>Mezerník</kbd> schovat se · <kbd>M</kbd> zvuk</div>
+        <div id="best-score-title" class="hidden">Nejlepší: <span></span></div>
+      </div>
+    </div>
+
+    <!-- Game over overlay -->
+    <div id="gameover-screen" class="overlay hidden">
+      <h1>Game Over</h1>
+      <p class="subtitle">Bolovi je z toho zle…</p>
+      <div class="score-final">Skóre: <span id="final-score">0</span></div>
+      <div class="best-line"><span id="best-label">Nejlepší:</span> <span id="best-final">0</span></div>
+      <button class="big-btn" id="restart-btn">Hrát znovu</button>
+    </div>
+
+    <!-- Mute indikátor -->
+    <div id="mute-indicator" class="hidden">Zvuk vypnutý</div>
+  </div>
+
   <script type="module" src="./src/main.js"></script>
 </body>
 </html>
