@@ -1,0 +1,44 @@
+html, body {
+  margin: 0;
+  padding: 0;
+  background: #0c0c14;
+  color: #f5f5e8;
+  font-family: "Courier New", monospace;
+  overflow: hidden;
+  height: 100vh;
+}
+
+body {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+}
+
+#game {
+  /* Pixel-perfect upscale */
+  image-rendering: pixelated;
+  image-rendering: -moz-crisp-edges;
+  image-rendering: crisp-edges;
+  background: #000;
+  /* Velikost se nastaví JS / CSS níže přes max-h/max-w */
+  width: min(96vw, calc(96vh * 320 / 240));
+  height: auto;
+  aspect-ratio: 320 / 240;
+  box-shadow: 0 0 0 4px #1a1a2a, 0 0 32px rgba(240, 200, 40, 0.15);
+  border-radius: 2px;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.hint {
+  position: fixed;
+  bottom: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 11px;
+  color: #4a4a6a;
+  letter-spacing: 1px;
+  pointer-events: none;
+  user-select: none;
+}
