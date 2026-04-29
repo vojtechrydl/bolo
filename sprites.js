@@ -1,594 +1,437 @@
 /* =========================================================
-   SPRITY — programově kreslené, 24×24 a 24×32 pro postavy
-   Větší rozlišení, plynulejší křivky, ale pořád pixel-perfect.
+   GAME — start/over, kolize, spawn, FX, pohyb hráče, AI paničky
    ========================================================= */
 
-import { spr, prerender } from './palette.js';
+import { TILE, ROOM_W, ROOM_H } from './config.js';
+import { STATE, game } from './state.js';
+import { ROOMS } from './rooms.js';
+import { FOOD_LIST, TRASH_LIST } from './sprites.js';
+import { keys, pressedThisFrame } from './input.js';
 import {
-  makeCanvas, fillCircle, fillEllipse, fillHalfEllipse,
-  rect, px, hline, vline, flipH
-} from './primitives.js';
+  snd_munch, snd_yum, snd_caught, snd_hide, snd_door,
+  snd_gameover, snd_start
+} from './audio.js';
+
+/* Hráč hitbox: 16×18, vykreslený sprite je 24×24, ofset v render */
+const PW = 16, PH = 18;
+/* Owner hitbox: 12×16 */
+const OW = 14, OH = 18;
 
 /* =========================================================
-   BOLO — 24×24
-   Pohledy: down (čelní), up (záda), right, left
-   Každý směr 2 framy (frame 0 = stojící, frame 1 = krok)
+   GAME FLOW
    ========================================================= */
+export function startGame(){
+  game.state = STATE.PLAYING;
+  game.tick = 0;
+  game.score = 0;
+  game.tummy = 0;
+  game.spawnTimer = 60;
+  game.spawnInterval = 240;       // 4s @ 60fps
+  game.gameTimer = 0;
+  game.maxItems = 5;
 
-function drawBoloHead(cx, ox, oy, dir){
-  // dir: 'down', 'up', 'right'
-  // hlava 14×11, vystředěná na ox, oy
+  // Bezpečný spawn - střed kuchyně mezi linkou a stolem
+  // Linka končí y=96, stůl začíná y=168 → mezera y=110-150
+  game.player.x = 240;
+  game.player.y = 130;
+  game.player.dir = 'down';
+  game.player.room = 'kitchen';
+  game.player.hidden = false;
+  game.player.hideSpot = null;
+  game.player.frame = 0;
+  game.player.frameTimer = 0;
 
-  if(dir === 'down'){
-    // klopené uši - po stranách, padající dolů
-    fillEllipse(cx, ox-7, oy+1, 3, 5, 1);   // L ucho - tmavá
-    fillEllipse(cx, ox-7, oy+1, 2, 4, 2);   // L ucho - mid
-    fillEllipse(cx, ox+7, oy+1, 3, 5, 1);   // R ucho
-    fillEllipse(cx, ox+7, oy+1, 2, 4, 2);
+  game.owner.x = 220;
+  game.owner.y = 140;
+  game.owner.dir = 'down';
+  game.owner.room = pickRandomRoom('kitchen');
+  game.owner.target = null;
+  game.owner.waitTimer = 90;
+  game.owner.angryTimer = 0;
+  game.owner.frame = 0;
+  game.owner.frameTimer = 0;
 
-    // hlava - kudrnatá srst (víc oválů pro nepravidelný tvar)
-    fillCircle(cx, ox, oy, 7, 1);           // outline tmavá
-    fillCircle(cx, ox, oy-1, 6, 2);         // tělo hlavy
-    fillEllipse(cx, ox, oy-2, 5, 4, 3);     // highlight
-    fillEllipse(cx, ox-2, oy-3, 3, 2, 4);   // top-left highlight
-    fillEllipse(cx, ox+2, oy-3, 2, 2, 4);   // top-right highlight
-    // kudrnaté detaily
-    px(cx, ox-4, oy-4, 4);
-    px(cx, ox+4, oy-4, 4);
-    px(cx, ox-3, oy-1, 4);
-    px(cx, ox+3, oy-1, 4);
+  game.items = [];
+  game.fx = [];
+  for(let i = 0; i < 3; i++) spawnItem();
+  snd_start();
+}
 
-    // oči (2x2)
-    rect(cx, ox-3, oy-1, 2, 2, 6);          // L oko bílá
-    rect(cx, ox+1, oy-1, 2, 2, 6);          // R oko bílá
-    px(cx, ox-2, oy, 0);                    // L pupila
-    px(cx, ox+2, oy, 0);                    // R pupila
-    px(cx, ox-3, oy-1, 6);                  // L catchlight
-    px(cx, ox+1, oy-1, 6);                  // R catchlight
-
-    // nos
-    rect(cx, ox-1, oy+2, 2, 2, 0);
-    px(cx, ox, oy+1, 6);                    // odlesk na nose
-
-    // pusa
-    px(cx, ox-1, oy+4, 0);
-    px(cx, ox, oy+4, 0);
-    px(cx, ox+1, oy+4, 0);
-    // růžový jazyk občas
-    px(cx, ox, oy+5, 17);
-  } else if(dir === 'up'){
-    // záda hlavy - jen kudrnatá srst, žádné oči
-    fillEllipse(cx, ox-7, oy+1, 3, 5, 1);
-    fillEllipse(cx, ox-7, oy+1, 2, 4, 2);
-    fillEllipse(cx, ox+7, oy+1, 3, 5, 1);
-    fillEllipse(cx, ox+7, oy+1, 2, 4, 2);
-
-    fillCircle(cx, ox, oy, 7, 1);
-    fillCircle(cx, ox, oy-1, 6, 2);
-    fillEllipse(cx, ox, oy-2, 5, 4, 3);
-    // víc kudrnatých detailů (vidíme pouze srst)
-    px(cx, ox-3, oy-3, 4);
-    px(cx, ox-1, oy-3, 4);
-    px(cx, ox+1, oy-3, 4);
-    px(cx, ox+3, oy-3, 4);
-    px(cx, ox-4, oy-1, 4);
-    px(cx, ox+4, oy-1, 4);
-    px(cx, ox-2, oy+1, 4);
-    px(cx, ox+2, oy+1, 4);
-  } else if(dir === 'right'){
-    // hlava z boku - protáhlá tlama
-    fillEllipse(cx, ox, oy-1, 6, 5, 1);     // outline
-    fillEllipse(cx, ox, oy-1, 5, 4, 2);     // body
-    fillEllipse(cx, ox+1, oy-2, 3, 3, 3);   // top hlight
-    fillEllipse(cx, ox+2, oy-3, 2, 1, 4);   // top tip
-
-    // ucho - klopené, padá dolů
-    fillEllipse(cx, ox-3, oy, 3, 4, 1);
-    fillEllipse(cx, ox-2, oy, 2, 3, 2);
-
-    // tlama (vyčnívá vpředu)
-    fillEllipse(cx, ox+5, oy+1, 3, 2, 2);
-    fillEllipse(cx, ox+5, oy+1, 2, 1, 3);
-    rect(cx, ox+6, oy, 2, 1, 0);             // nos
-
-    // oko
-    rect(cx, ox+2, oy-1, 2, 2, 6);
-    px(cx, ox+3, oy, 0);
-    px(cx, ox+2, oy-1, 6);                   // catchlight
-
-    // pusa
-    px(cx, ox+5, oy+2, 0);
-    px(cx, ox+6, oy+2, 0);
+export function gameOver(){
+  game.state = STATE.GAME_OVER;
+  if(game.score > game.best){
+    game.best = game.score;
+    try { localStorage.setItem('boloEatsBest', String(game.best)); } catch(e){}
   }
+  snd_gameover();
 }
-
-function drawBoloBody(cx, ox, oy, dir, frame){
-  // tělo (cca 12×8), pozice ox=střed dole
-
-  if(dir === 'down'){
-    // tělo - tmavý ovál
-    fillEllipse(cx, ox, oy, 7, 5, 2);
-    fillEllipse(cx, ox, oy-1, 6, 4, 3);
-    // bílá náprsenka
-    fillEllipse(cx, ox, oy, 4, 3, 6);
-    fillEllipse(cx, ox, oy-1, 3, 2, 7);
-
-    // přední packy
-    if(frame === 0){
-      rect(cx, ox-5, oy+4, 2, 2, 1);
-      rect(cx, ox+3, oy+4, 2, 2, 1);
-    } else {
-      rect(cx, ox-5, oy+3, 2, 3, 1);
-      rect(cx, ox+3, oy+3, 2, 3, 1);
-    }
-  } else if(dir === 'up'){
-    // záda - tmavý ovál bez náprsenky
-    fillEllipse(cx, ox, oy, 7, 5, 2);
-    fillEllipse(cx, ox, oy-1, 6, 4, 3);
-    fillEllipse(cx, ox, oy-1, 4, 3, 4);     // ridge highlight
-
-    // ocásek - kudrnatý nahoru-doprava
-    px(cx, ox+3, oy-6, 2);
-    px(cx, ox+4, oy-6, 2);
-    px(cx, ox+5, oy-5, 2);
-    px(cx, ox+5, oy-4, 2);
-    px(cx, ox+4, oy-3, 3);  // highlight
-
-    // zadní packy (u země)
-    if(frame === 0){
-      rect(cx, ox-5, oy+4, 2, 2, 1);
-      rect(cx, ox+3, oy+4, 2, 2, 1);
-    } else {
-      rect(cx, ox-5, oy+3, 2, 3, 1);
-      rect(cx, ox+3, oy+3, 2, 3, 1);
-    }
-  } else if(dir === 'right'){
-    // tělo z boku - protáhlé doleva (zadek), hlava napravo
-    fillEllipse(cx, ox-2, oy, 8, 4, 2);
-    fillEllipse(cx, ox-2, oy-1, 7, 3, 3);
-    // bílá náprsenka (jen vepředu, kde je hruď)
-    fillEllipse(cx, ox+2, oy, 3, 2, 6);
-
-    // ocásek vlevo (kudrnatý)
-    px(cx, ox-9, oy-2, 2);
-    px(cx, ox-9, oy-3, 2);
-    px(cx, ox-8, oy-4, 2);
-    px(cx, ox-7, oy-4, 3);
-
-    // nohy - 4 (přední pár ovládáno frame, zadní stojí)
-    if(frame === 0){
-      rect(cx, ox-5, oy+3, 2, 3, 1);  // zadní L
-      rect(cx, ox-2, oy+3, 2, 3, 1);  // zadní R
-      rect(cx, ox+2, oy+3, 2, 3, 1);  // přední L
-      rect(cx, ox+5, oy+3, 2, 3, 1);  // přední R
-    } else {
-      rect(cx, ox-5, oy+3, 2, 2, 1);
-      rect(cx, ox-2, oy+3, 2, 3, 1);
-      rect(cx, ox+2, oy+3, 2, 3, 1);
-      rect(cx, ox+5, oy+3, 2, 2, 1);
-    }
-  }
-}
-
-function makeBoloDown(frame){
-  const { c, cx } = makeCanvas(24, 24);
-  drawBoloBody(cx, 12, 16, 'down', frame);
-  drawBoloHead(cx, 12, 8, 'down');
-  return c;
-}
-
-function makeBoloUp(frame){
-  const { c, cx } = makeCanvas(24, 24);
-  drawBoloBody(cx, 12, 16, 'up', frame);
-  drawBoloHead(cx, 12, 8, 'up');
-  return c;
-}
-
-function makeBoloRight(frame){
-  const { c, cx } = makeCanvas(24, 24);
-  drawBoloBody(cx, 10, 14, 'right', frame);
-  drawBoloHead(cx, 17, 9, 'right');
-  return c;
-}
-
-export const BOLO_DOWN  = [makeBoloDown(0), makeBoloDown(1)];
-export const BOLO_UP    = [makeBoloUp(0), makeBoloUp(1)];
-export const BOLO_RIGHT = [makeBoloRight(0), makeBoloRight(1)];
-export const BOLO_LEFT  = [flipH(BOLO_RIGHT[0]), flipH(BOLO_RIGHT[1])];
-
-/* Bolo schovaný (jen vykukuje hlava nad nábytkem) */
-export const BOLO_HIDE = (() => {
-  const { c, cx } = makeCanvas(24, 16);
-  // jen vrch hlavy a oči, jako by byl pod stolem
-  fillEllipse(cx, 12, 12, 7, 4, 1);
-  fillEllipse(cx, 12, 11, 6, 3, 2);
-  fillEllipse(cx, 12, 10, 5, 2, 3);
-  // uši
-  fillEllipse(cx, 5, 11, 2, 3, 1);
-  fillEllipse(cx, 19, 11, 2, 3, 1);
-  // oči vykukující
-  rect(cx, 9, 10, 2, 2, 6);
-  rect(cx, 13, 10, 2, 2, 6);
-  px(cx, 10, 11, 0);
-  px(cx, 14, 11, 0);
-  // detaily srsti
-  px(cx, 8, 9, 4);
-  px(cx, 12, 8, 4);
-  px(cx, 16, 9, 4);
-  return c;
-})();
-
-/* Bolo smutný (Game Over) - sed, klopené uši, vidící dolů */
-export const BOLO_SAD = (() => {
-  const { c, cx } = makeCanvas(32, 36);
-  // tělo (sedící)
-  fillEllipse(cx, 16, 28, 10, 6, 2);
-  fillEllipse(cx, 16, 27, 9, 5, 3);
-  // bílá náprsenka
-  fillEllipse(cx, 16, 27, 5, 4, 6);
-  fillEllipse(cx, 16, 26, 4, 3, 7);
-  // hlava
-  fillCircle(cx, 16, 16, 9, 1);
-  fillCircle(cx, 16, 15, 8, 2);
-  fillEllipse(cx, 16, 14, 7, 5, 3);
-  fillEllipse(cx, 14, 12, 4, 3, 4);
-  // klopené uši (delší, smutné)
-  fillEllipse(cx, 7, 19, 3, 6, 1);
-  fillEllipse(cx, 7, 19, 2, 5, 2);
-  fillEllipse(cx, 25, 19, 3, 6, 1);
-  fillEllipse(cx, 25, 19, 2, 5, 2);
-  // smutné oči (zavřené - linky)
-  hline(cx, 11, 17, 3, 0);
-  hline(cx, 18, 17, 3, 0);
-  // slza
-  px(cx, 12, 19, 31);
-  px(cx, 12, 20, 31);
-  // nos
-  rect(cx, 15, 19, 2, 2, 0);
-  // smutná pusa (dolů)
-  px(cx, 13, 22, 0);
-  px(cx, 14, 23, 0);
-  px(cx, 15, 23, 0);
-  px(cx, 16, 23, 0);
-  px(cx, 17, 23, 0);
-  px(cx, 18, 22, 0);
-  // packy
-  rect(cx, 10, 32, 3, 3, 1);
-  rect(cx, 19, 32, 3, 3, 1);
-  return c;
-})();
-
-/* Bolo BIG (title screen) - velký 4x scaled */
-export const BOLO_BIG = (() => {
-  const big = makeBoloDown(0);
-  const { c, cx } = makeCanvas(big.width * 3, big.height * 3);
-  cx.imageSmoothingEnabled = false;
-  cx.drawImage(big, 0, 0, big.width * 3, big.height * 3);
-  return c;
-})();
 
 /* =========================================================
-   PANIČKA — 24×36 (vyšší)
-   Hlava + tělo + nohy
+   KOLIZE
    ========================================================= */
-
-function drawOwnerHead(cx, ox, oy, dir){
-  if(dir === 'down'){
-    // vlasy (hnědé)
-    fillCircle(cx, ox, oy-1, 6, 14);
-    fillEllipse(cx, ox, oy-3, 6, 3, 13);    // top
-    // obličej
-    fillCircle(cx, ox, oy+1, 5, 12);        // skin
-    fillEllipse(cx, ox, oy+2, 4, 3, 12);    // chin highlight
-    // vlasy přes čelo
-    hline(cx, ox-5, oy-2, 11, 14);
-    hline(cx, ox-5, oy-1, 11, 14);
-    px(cx, ox-4, oy, 14);
-    px(cx, ox+4, oy, 14);
-    // oči
-    px(cx, ox-2, oy+1, 0);
-    px(cx, ox+2, oy+1, 0);
-    // pusa (úsměv)
-    px(cx, ox-1, oy+3, 15);
-    px(cx, ox, oy+3, 15);
-    px(cx, ox+1, oy+3, 15);
-    // tváře (lehké zarudnutí)
-    px(cx, ox-3, oy+2, 17);
-    px(cx, ox+3, oy+2, 17);
-  } else if(dir === 'up'){
-    // záda hlavy - jen vlasy
-    fillCircle(cx, ox, oy, 6, 14);
-    fillEllipse(cx, ox, oy-1, 5, 4, 13);
-    // krk dole
-    rect(cx, ox-1, oy+5, 3, 1, 12);
-  } else if(dir === 'right'){
-    // hlava z boku
-    fillCircle(cx, ox, oy, 5, 14);          // vlasy outline
-    fillEllipse(cx, ox-1, oy+1, 4, 4, 12);  // obličej
-    fillEllipse(cx, ox, oy-2, 4, 2, 13);    // top vlasy
-    // vlasy padají dozadu
-    px(cx, ox-4, oy, 14);
-    px(cx, ox-4, oy+1, 14);
-    px(cx, ox-3, oy+2, 14);
-    // oko
-    px(cx, ox+1, oy+1, 0);
-    // pusa
-    px(cx, ox+2, oy+3, 15);
-    // nos
-    px(cx, ox+3, oy+1, 13);
-  }
+export function rectsCollide(ax, ay, aw, ah, bx, by, bw, bh){
+  return ax < bx+bw && ax+aw > bx && ay < by+bh && ay+ah > by;
 }
 
-function drawOwnerBody(cx, ox, oy, dir, frame){
-  // tělo (tričko) cca 10×12, pozice ox=střed, oy=top těla
+export function getBlockingFurniture(roomId){
+  return ROOMS[roomId].furniture.filter(f =>
+    f.type !== 'bowl' && f.type !== 'bush' && f.type !== 'counter'
+  );
+}
 
-  if(dir === 'down' || dir === 'up'){
-    // tričko - žluté
-    fillEllipse(cx, ox, oy+5, 7, 7, 19);    // tělo
-    fillEllipse(cx, ox, oy+4, 6, 6, 20);    // detail tmavší pas
-    rect(cx, ox-5, oy, 11, 4, 19);          // ramena/krk
-    // kalhoty - modré
-    rect(cx, ox-5, oy+10, 11, 4, 30);
-    fillEllipse(cx, ox, oy+11, 5, 2, 31);
-    // ruce (po stranách)
-    rect(cx, ox-7, oy+3, 2, 6, 19);
-    rect(cx, ox+5, oy+3, 2, 6, 19);
-    // dlaně
-    rect(cx, ox-7, oy+9, 2, 2, 12);
-    rect(cx, ox+5, oy+9, 2, 2, 12);
-    // nohy - 2 framy
-    if(frame === 0){
-      rect(cx, ox-3, oy+14, 2, 4, 30);
-      rect(cx, ox+1, oy+14, 2, 4, 30);
-      rect(cx, ox-3, oy+18, 3, 2, 0);       // boty
-      rect(cx, ox+1, oy+18, 3, 2, 0);
-    } else {
-      rect(cx, ox-3, oy+14, 2, 5, 30);
-      rect(cx, ox+1, oy+13, 2, 5, 30);
-      rect(cx, ox-3, oy+19, 3, 2, 0);
-      rect(cx, ox+1, oy+18, 3, 2, 0);
-    }
-  } else if(dir === 'right'){
-    // bok - užší
-    fillEllipse(cx, ox-1, oy+5, 5, 7, 19);
-    fillEllipse(cx, ox-1, oy+4, 4, 5, 20);
-    rect(cx, ox-3, oy, 7, 4, 19);
-    // ruka (vepředu)
-    rect(cx, ox+2, oy+3, 2, 6, 19);
-    rect(cx, ox+2, oy+9, 2, 2, 12);
-    // kalhoty
-    rect(cx, ox-3, oy+10, 7, 4, 30);
-    // nohy
-    if(frame === 0){
-      rect(cx, ox-2, oy+14, 2, 4, 30);
-      rect(cx, ox+1, oy+14, 2, 4, 30);
-      rect(cx, ox-2, oy+18, 3, 2, 0);
-      rect(cx, ox+1, oy+18, 3, 2, 0);
-    } else {
-      rect(cx, ox-2, oy+14, 2, 5, 30);
-      rect(cx, ox+2, oy+14, 2, 4, 30);
-      rect(cx, ox-2, oy+19, 3, 2, 0);
-      rect(cx, ox+2, oy+18, 3, 2, 0);
+/* Vrací nábytek, do kterého naráží daný obdélník (x,y,w,h). */
+export function isBlockedAt(x, y, roomId, w=PW, h=PH){
+  const furn = getBlockingFurniture(roomId);
+  for(const f of furn){
+    // Hitbox nábytku - počítáme s lower portion (postavy můžou částečně překrývat top)
+    const fx = f.px + 4;
+    const fy = f.py + Math.floor(f.h * 0.4);
+    const fw = f.w - 8;
+    const fh = Math.ceil(f.h * 0.6);
+    if(rectsCollide(x, y, w, h, fx, fy, fw, fh)) return f;
+  }
+  // counters - pevně blokují celé
+  for(const f of ROOMS[roomId].furniture){
+    if(f.type !== 'counter') continue;
+    if(rectsCollide(x, y, w, h, f.px, f.py, f.w, f.h)) return f;
+  }
+  return null;
+}
+
+export function findHideSpot(playerX, playerY, roomId){
+  const room = ROOMS[roomId];
+  for(const f of room.furniture){
+    if(!f.hide) continue;
+    const cx = f.px + f.w/2, cy = f.py + f.h/2;
+    if(Math.abs(playerX + PW/2 - cx) < f.w/2 + 8 &&
+       Math.abs(playerY + PH/2 - cy) < f.h/2 + 8){
+      return f;
     }
   }
+  return null;
 }
-
-function makeOwnerDown(frame){
-  const { c, cx } = makeCanvas(24, 36);
-  drawOwnerBody(cx, 12, 12, 'down', frame);
-  drawOwnerHead(cx, 12, 8, 'down');
-  return c;
-}
-function makeOwnerUp(frame){
-  const { c, cx } = makeCanvas(24, 36);
-  drawOwnerBody(cx, 12, 12, 'up', frame);
-  drawOwnerHead(cx, 12, 8, 'up');
-  return c;
-}
-function makeOwnerRight(frame){
-  const { c, cx } = makeCanvas(24, 36);
-  drawOwnerBody(cx, 12, 12, 'right', frame);
-  drawOwnerHead(cx, 12, 8, 'right');
-  return c;
-}
-
-export const OWNER_DOWN  = [makeOwnerDown(0), makeOwnerDown(1)];
-export const OWNER_UP    = [makeOwnerUp(0), makeOwnerUp(1)];
-export const OWNER_RIGHT = [makeOwnerRight(0), makeOwnerRight(1)];
-export const OWNER_LEFT  = [flipH(OWNER_RIGHT[0]), flipH(OWNER_RIGHT[1])];
-
-/* Vykřičník nad hlavou */
-export const ALERT_SPR = (() => {
-  const { c, cx } = makeCanvas(8, 16);
-  rect(cx, 3, 0, 2, 9, 15);     // tmavá červená střed
-  rect(cx, 3, 1, 2, 7, 16);     // červená
-  px(cx, 3, 1, 17);             // růžový highlight
-  rect(cx, 3, 11, 2, 2, 15);    // tečka
-  return c;
-})();
 
 /* =========================================================
-   PŘEDMĚTY — 18×18, vykreslené pixel art
+   ITEMS — spawn
    ========================================================= */
+export function pickRandomRoom(notThis){
+  const ids = Object.keys(ROOMS).filter(r => r !== notThis);
+  return ids[Math.floor(Math.random() * ids.length)];
+}
 
-export const ITEM_PIZZA = (() => {
-  const { c, cx } = makeCanvas(18, 18);
-  // klín pizzy
-  fillCircle(cx, 9, 11, 7, 12);             // korpus krémový
-  fillCircle(cx, 9, 11, 6, 20);             // sýr
-  // okraj
-  for(let i=0;i<360;i+=20){
-    const rad = i*Math.PI/180;
-    px(cx, 9+Math.round(7*Math.cos(rad)), 11+Math.round(7*Math.sin(rad)), 11);
+export function spawnItem(){
+  if(game.items.length >= game.maxItems) return;
+  const inSameRoom = Math.random() < 0.5;
+  const roomId = inSameRoom ? game.player.room : pickRandomRoom(game.player.room);
+
+  const isFood = Math.random() < 0.45;
+  const list = isFood ? FOOD_LIST : TRASH_LIST;
+  const data = list[Math.floor(Math.random() * list.length)];
+
+  for(let tries = 0; tries < 30; tries++){
+    const x = 32 + Math.floor(Math.random() * (ROOM_W - 80));
+    const y = 32 + Math.floor(Math.random() * (ROOM_H - 80));
+    if(isBlockedAt(x, y, roomId, 18, 18)) continue;
+    // Nesmí být v dveřních otvorech
+    let inDoor = false;
+    for(const dir in ROOMS[roomId].doors){
+      const d = ROOMS[roomId].doors[dir];
+      const t1 = d.range[0]*TILE, t2 = (d.range[1]+1)*TILE;
+      if(dir === 'east'  && x > ROOM_W-48 && y > t1-12 && y < t2+12) inDoor = true;
+      if(dir === 'west'  && x < 48        && y > t1-12 && y < t2+12) inDoor = true;
+      if(dir === 'south' && y > ROOM_H-48 && x > t1-12 && x < t2+12) inDoor = true;
+      if(dir === 'north' && y < 48        && x > t1-12 && x < t2+12) inDoor = true;
+    }
+    if(inDoor) continue;
+    game.items.push({
+      x, y, isFood, data,
+      room: roomId,
+      life: 0,
+      bobPhase: Math.random() * Math.PI * 2,
+    });
+    return;
   }
-  // saláma (červené tečky)
-  rect(cx, 5, 8, 2, 2, 15);
-  rect(cx, 11, 7, 2, 2, 15);
-  rect(cx, 7, 13, 2, 2, 15);
-  rect(cx, 12, 12, 2, 2, 15);
-  px(cx, 9, 10, 16);
-  return c;
-})();
-
-export const ITEM_SAUSAGE = (() => {
-  const { c, cx } = makeCanvas(18, 18);
-  // párek (oranžovo-červený)
-  fillEllipse(cx, 9, 9, 7, 3, 11);          // tmavý okraj
-  fillEllipse(cx, 9, 9, 6, 2, 16);          // červená
-  fillEllipse(cx, 9, 8, 5, 1, 17);          // highlight
-  // konce (tmavší)
-  px(cx, 2, 9, 11);
-  px(cx, 16, 9, 11);
-  return c;
-})();
-
-export const ITEM_COOKIE = (() => {
-  const { c, cx } = makeCanvas(18, 18);
-  fillCircle(cx, 9, 9, 7, 22);              // tmavé těsto okraj
-  fillCircle(cx, 9, 9, 6, 23);              // střední
-  fillEllipse(cx, 8, 7, 4, 3, 24);          // highlight
-  // čokoládové kousky
-  rect(cx, 5, 7, 2, 2, 11);
-  rect(cx, 11, 6, 2, 2, 11);
-  rect(cx, 7, 11, 2, 2, 11);
-  rect(cx, 11, 11, 2, 2, 11);
-  px(cx, 9, 9, 11);
-  return c;
-})();
-
-export const ITEM_APPLE = (() => {
-  const { c, cx } = makeCanvas(18, 18);
-  // jablko
-  fillCircle(cx, 9, 11, 6, 15);
-  fillCircle(cx, 9, 11, 5, 16);
-  fillEllipse(cx, 7, 9, 2, 2, 17);          // highlight
-  // stopka
-  rect(cx, 9, 4, 1, 3, 22);
-  // lístek
-  fillEllipse(cx, 11, 5, 2, 1, 27);
-  return c;
-})();
-
-export const ITEM_BREAD = (() => {
-  const { c, cx } = makeCanvas(18, 18);
-  // rohlík (oblouk)
-  fillEllipse(cx, 9, 10, 7, 4, 22);         // tmavá kůrka
-  fillEllipse(cx, 9, 9, 6, 3, 24);          // střední
-  fillEllipse(cx, 9, 8, 5, 2, 25);          // light
-  // pruhy přes
-  px(cx, 5, 9, 22);
-  px(cx, 8, 8, 22);
-  px(cx, 11, 8, 22);
-  px(cx, 14, 9, 22);
-  return c;
-})();
-
-export const ITEM_SOCK = (() => {
-  const { c, cx } = makeCanvas(18, 18);
-  // ponožka - obdélníková s patou
-  rect(cx, 5, 4, 8, 7, 31);                 // modrá noha
-  rect(cx, 5, 11, 8, 4, 30);                // pata
-  rect(cx, 13, 11, 2, 4, 30);               // pata bok
-  // pruhy
-  hline(cx, 5, 5, 8, 6);
-  hline(cx, 5, 7, 8, 6);
-  // okraj nahoře
-  hline(cx, 5, 4, 8, 0);
-  return c;
-})();
-
-export const ITEM_SLIPPER = (() => {
-  const { c, cx } = makeCanvas(18, 18);
-  // bačkora - oválný spodek + pásek
-  fillEllipse(cx, 9, 12, 8, 3, 16);         // podrážka
-  fillEllipse(cx, 9, 11, 7, 2, 17);
-  // pásek přes
-  rect(cx, 4, 7, 11, 4, 15);
-  rect(cx, 4, 7, 11, 1, 16);                // top highlight
-  // chlupatý okraj
-  px(cx, 3, 9, 6);
-  px(cx, 14, 9, 6);
-  return c;
-})();
-
-export const ITEM_TP = (() => {
-  const { c, cx } = makeCanvas(18, 18);
-  // toaleťák - válec + odvíjející se kus
-  fillEllipse(cx, 9, 8, 5, 4, 6);           // válec
-  fillEllipse(cx, 9, 7, 4, 3, 7);
-  px(cx, 9, 8, 8);                           // střed díra
-  // konec toaleťáku visí dolů
-  rect(cx, 9, 11, 3, 6, 6);
-  rect(cx, 9, 11, 3, 1, 8);
-  return c;
-})();
-
-export const ITEM_REMOTE = (() => {
-  const { c, cx } = makeCanvas(18, 18);
-  // dálkový ovladač - vertikální obdélník s tlačítky
-  rect(cx, 5, 3, 8, 13, 1);                 // tělo
-  rect(cx, 6, 4, 6, 11, 2);                 // displej
-  // tlačítka (světle barevné)
-  px(cx, 7, 6, 19);                          // žluté
-  px(cx, 9, 6, 16);                          // červené
-  px(cx, 11, 6, 27);                         // zelené
-  rect(cx, 7, 9, 5, 1, 9);                   // šedý pruh
-  rect(cx, 7, 11, 2, 1, 9);
-  rect(cx, 10, 11, 2, 1, 9);
-  return c;
-})();
-
-export const ITEM_FLOWER = (() => {
-  const { c, cx } = makeCanvas(18, 18);
-  // květina v květináči
-  rect(cx, 5, 12, 8, 4, 22);                // květináč hnědý
-  rect(cx, 4, 12, 10, 1, 23);
-  // stonek
-  rect(cx, 9, 7, 1, 5, 26);
-  // květ
-  px(cx, 8, 6, 18);                          // růžová
-  px(cx, 9, 5, 17);
-  px(cx, 10, 6, 18);
-  px(cx, 9, 7, 19);                          // žlutý střed
-  px(cx, 8, 7, 18);
-  px(cx, 10, 7, 18);
-  // listy
-  px(cx, 7, 9, 27);
-  px(cx, 11, 10, 27);
-  return c;
-})();
-
-export const ITEM_PENCIL = (() => {
-  const { c, cx } = makeCanvas(18, 18);
-  // tužka diagonálně
-  for(let i=0;i<10;i++){
-    px(cx, 4+i, 13-i, 19);                   // žluté tělo
-    px(cx, 5+i, 13-i, 20);                   // tmavší
-  }
-  // hrot
-  px(cx, 14, 4, 12);                         // dřevo
-  px(cx, 15, 4, 0);                          // tuha
-  // guma
-  rect(cx, 3, 13, 2, 2, 16);
-  return c;
-})();
+}
 
 /* =========================================================
-   ITEM LISTY (pro game logiku)
+   FX
    ========================================================= */
-export const FOOD_LIST = [
-  { spr: ITEM_PIZZA,   pts: 30, name: 'pizza' },
-  { spr: ITEM_SAUSAGE, pts: 25, name: 'párek' },
-  { spr: ITEM_COOKIE,  pts: 20, name: 'sušenka' },
-  { spr: ITEM_APPLE,   pts: 10, name: 'jablko' },
-  { spr: ITEM_BREAD,   pts: 15, name: 'rohlík' },
-];
+export function addFx(text, x, y, color, life=60){
+  game.fx.push({ text, x, y, color, life, age: 0 });
+}
 
-export const TRASH_LIST = [
-  { spr: ITEM_SOCK,    pts: 5, name: 'ponožka',   tummy: 12 },
-  { spr: ITEM_SLIPPER, pts: 5, name: 'papuče',    tummy: 14 },
-  { spr: ITEM_TP,      pts: 5, name: 'toaleťák',  tummy: 10 },
-  { spr: ITEM_REMOTE,  pts: 5, name: 'dálkák',    tummy: 16 },
-  { spr: ITEM_FLOWER,  pts: 5, name: 'kytka',     tummy: 13 },
-  { spr: ITEM_PENCIL,  pts: 5, name: 'tužka',     tummy: 11 },
-];
+/* =========================================================
+   POHYB — hráč
+   ========================================================= */
+function tryMove(p, dx, dy){
+  let fx = dx, fy = dy;
+  // Pokus zvlášť X a Y - umožní sliding podél stěn
+  if(isBlockedAt(p.x + fx, p.y, p.room, PW, PH)) fx = 0;
+  if(isBlockedAt(p.x, p.y + fy, p.room, PW, PH)) fy = 0;
+
+  let nx = p.x + fx, ny = p.y + fy;
+  const room = ROOMS[p.room];
+
+  // EAST
+  if(nx + PW > ROOM_W){
+    if(room.doors.east){
+      const d = room.doors.east;
+      const t1 = d.range[0]*TILE, t2 = (d.range[1]+1)*TILE;
+      if(p.y + PH/2 >= t1 && p.y + PH/2 <= t2){
+        p.room = d.target; p.x = TILE - 2; snd_door(); return;
+      }
+    }
+    nx = ROOM_W - PW;
+  }
+  // WEST
+  if(nx < 0){
+    if(room.doors.west){
+      const d = room.doors.west;
+      const t1 = d.range[0]*TILE, t2 = (d.range[1]+1)*TILE;
+      if(p.y + PH/2 >= t1 && p.y + PH/2 <= t2){
+        p.room = d.target; p.x = ROOM_W - TILE - PW + 2; snd_door(); return;
+      }
+    }
+    nx = 0;
+  }
+  // SOUTH
+  if(ny + PH > ROOM_H){
+    if(room.doors.south){
+      const d = room.doors.south;
+      const t1 = d.range[0]*TILE, t2 = (d.range[1]+1)*TILE;
+      if(p.x + PW/2 >= t1 && p.x + PW/2 <= t2){
+        p.room = d.target; p.y = TILE - 2; snd_door(); return;
+      }
+    }
+    ny = ROOM_H - PH;
+  }
+  // NORTH
+  if(ny < 0){
+    if(room.doors.north){
+      const d = room.doors.north;
+      const t1 = d.range[0]*TILE, t2 = (d.range[1]+1)*TILE;
+      if(p.x + PW/2 >= t1 && p.x + PW/2 <= t2){
+        p.room = d.target; p.y = ROOM_H - TILE - PH + 2; snd_door(); return;
+      }
+    }
+    ny = 0;
+  }
+
+  // Stěny (6px tlusté)
+  const WALL = 6;
+  if(nx < WALL) nx = WALL;
+  if(nx + PW > ROOM_W - WALL) nx = ROOM_W - WALL - PW;
+  if(ny < WALL) ny = WALL;
+  if(ny + PH > ROOM_H - WALL) ny = ROOM_H - WALL - PH;
+
+  p.x = nx;
+  p.y = ny;
+}
+
+function updatePlayer(){
+  const p = game.player;
+
+  // Schování
+  if(pressedThisFrame[' ']){
+    if(p.hidden){
+      p.hidden = false;
+      p.hideSpot = null;
+      snd_hide();
+    } else {
+      const spot = findHideSpot(p.x, p.y, p.room);
+      if(spot){
+        p.hidden = true;
+        p.hideSpot = spot;
+        p.x = spot.px + spot.w/2 - PW/2;
+        p.y = spot.py + spot.h/2 - PH/2;
+        snd_hide();
+      }
+    }
+  }
+  if(p.hidden){ p.moving = false; return; }
+
+  // Pohyb
+  let dx = 0, dy = 0;
+  if(keys['arrowleft']  || keys['a']) dx -= 1;
+  if(keys['arrowright'] || keys['d']) dx += 1;
+  if(keys['arrowup']    || keys['w']) dy -= 1;
+  if(keys['arrowdown']  || keys['s']) dy += 1;
+
+  const speed = 2.0;
+  if(dx && dy){ dx *= 0.7071; dy *= 0.7071; }
+  dx *= speed; dy *= speed;
+
+  if(dx || dy){
+    p.moving = true;
+    if(Math.abs(dx) > Math.abs(dy)) p.dir = dx > 0 ? 'right' : 'left';
+    else                            p.dir = dy > 0 ? 'down'  : 'up';
+    tryMove(p, dx, dy);
+  } else {
+    p.moving = false;
+  }
+
+  if(p.moving){
+    p.frameTimer++;
+    if(p.frameTimer > 8){ p.frame = (p.frame + 1) % 2; p.frameTimer = 0; }
+  } else {
+    p.frame = 0;
+  }
+
+  // Sebrání věcí
+  for(let i = game.items.length - 1; i >= 0; i--){
+    const it = game.items[i];
+    if(it.room !== p.room) continue;
+    if(rectsCollide(p.x, p.y, PW, PH, it.x, it.y, 18, 18)){
+      eatItem(it);
+      game.items.splice(i, 1);
+    }
+  }
+}
+
+function eatItem(it){
+  if(it.isFood){
+    game.score += it.data.pts;
+    game.tummy = Math.max(0, game.tummy - 3);
+    addFx('+' + it.data.pts, it.x, it.y - 4, '#5ab44a', 50);
+    snd_yum();
+  } else {
+    game.score += it.data.pts;
+    let tummyHit = it.data.tummy;
+    let caught = false;
+
+    const o = game.owner;
+    if(!game.player.hidden && o.room === game.player.room){
+      const dist = Math.hypot(o.x - game.player.x, o.y - game.player.y);
+      if(dist < 140){
+        const dx = (game.player.x - o.x), dy = (game.player.y - o.y);
+        let inFront = false;
+        if(o.dir === 'down'  && dy > -16) inFront = true;
+        if(o.dir === 'up'    && dy <  16) inFront = true;
+        if(o.dir === 'right' && dx > -16) inFront = true;
+        if(o.dir === 'left'  && dx <  16) inFront = true;
+        if(inFront){
+          tummyHit += 18;
+          caught = true;
+          o.angryTimer = 120;
+          addFx('Bolo!', o.x, o.y - 16, '#fa8090', 80);
+          snd_caught();
+        }
+      }
+    }
+
+    game.tummy += tummyHit;
+    addFx('+' + it.data.pts, it.x, it.y - 4, caught ? '#fa8090' : '#f0c828', 50);
+    addFx('-' + tummyHit + ' bříško', it.x - 8, it.y + 12, '#fa8090', 60);
+    if(!caught) snd_munch();
+
+    if(game.tummy >= 100){
+      game.tummy = 100;
+      gameOver();
+    }
+  }
+}
+
+/* =========================================================
+   AI PANIČKY
+   ========================================================= */
+function updateOwner(){
+  const o = game.owner;
+  if(o.angryTimer > 0) o.angryTimer--;
+
+  if(o.target){
+    const dx = o.target.x - o.x;
+    const dy = o.target.y - o.y;
+    const d = Math.hypot(dx, dy);
+    if(d < 3){
+      o.target = null;
+      o.waitTimer = 90 + Math.floor(Math.random() * 120);
+      o.moving = false;
+    } else {
+      const speed = 1.2;
+      const mx = (dx/d) * speed, my = (dy/d) * speed;
+      o.moving = true;
+      if(Math.abs(mx) > Math.abs(my)) o.dir = mx > 0 ? 'right' : 'left';
+      else                            o.dir = my > 0 ? 'down'  : 'up';
+      const nx = o.x + mx, ny = o.y + my;
+      if(!isBlockedAt(nx, o.y, o.room, OW, OH)) o.x = nx;
+      if(!isBlockedAt(o.x, ny, o.room, OW, OH)) o.y = ny;
+      const WALL = 6;
+      if(o.x < WALL) o.x = WALL;
+      if(o.x + OW > ROOM_W - WALL) o.x = ROOM_W - WALL - OW;
+      if(o.y < WALL) o.y = WALL;
+      if(o.y + OH > ROOM_H - WALL) o.y = ROOM_H - WALL - OH;
+    }
+  } else {
+    o.moving = false;
+    o.waitTimer--;
+    if(o.waitTimer <= 0){
+      // 35% jiná místnost
+      if(Math.random() < 0.35){
+        const newRoom = pickRandomRoom(o.room);
+        const doors = ROOMS[o.room].doors;
+        const dirEntry = Object.entries(doors).find(([k,v]) => v.target === newRoom);
+        if(dirEntry){
+          const [dir, d] = dirEntry;
+          o.room = newRoom;
+          if(dir === 'east')  { o.x = TILE - 2;             o.y = d.range[0]*TILE + 16; }
+          if(dir === 'west')  { o.x = ROOM_W - TILE - OW;   o.y = d.range[0]*TILE + 16; }
+          if(dir === 'south') { o.y = TILE - 2;             o.x = d.range[0]*TILE + 16; }
+          if(dir === 'north') { o.y = ROOM_H - TILE - OH;   o.x = d.range[0]*TILE + 16; }
+        }
+      }
+      let tx, ty;
+      for(let tries=0; tries<20; tries++){
+        tx = 24 + Math.random() * (ROOM_W - 60);
+        ty = 24 + Math.random() * (ROOM_H - 80);
+        if(!isBlockedAt(tx, ty, o.room, OW, OH)) break;
+      }
+      o.target = { x: tx, y: ty };
+    }
+  }
+
+  if(o.moving){
+    o.frameTimer++;
+    if(o.frameTimer > 12){ o.frame = (o.frame + 1) % 2; o.frameTimer = 0; }
+  } else {
+    o.frame = 0;
+  }
+}
+
+/* =========================================================
+   UPDATE PLAY
+   ========================================================= */
+export function updatePlay(){
+  game.tick++;
+  game.gameTimer++;
+  updatePlayer();
+  updateOwner();
+
+  // Spawn
+  game.spawnTimer--;
+  if(game.spawnTimer <= 0){
+    spawnItem();
+    game.spawnTimer = game.spawnInterval;
+  }
+
+  // Difficulty
+  if(game.gameTimer % 600  === 0 && game.spawnInterval > 70) game.spawnInterval = Math.max(70, game.spawnInterval - 20);
+  if(game.gameTimer % 1500 === 0 && game.maxItems < 12) game.maxItems++;
+
+  // Regen bříška
+  if(game.tick % 90 === 0 && game.tummy > 0) game.tummy = Math.max(0, game.tummy - 1);
+
+  // FX
+  for(let i = game.fx.length - 1; i >= 0; i--){
+    const f = game.fx[i];
+    f.age++;
+    f.y -= 0.5;
+    if(f.age >= f.life) game.fx.splice(i, 1);
+  }
+
+  // Items lifetime
+  for(let i = game.items.length - 1; i >= 0; i--){
+    const it = game.items[i];
+    it.life++;
+    if(it.life > 60*30) game.items.splice(i, 1);
+  }
+}
