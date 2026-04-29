@@ -234,8 +234,30 @@ function updatePlayer(){
   // Schování
   if(pressedThisFrame[' ']){
     if(p.hidden){
+      // Vylézt - musíme najít volné místo HNED VEDLE nábytku, jinak by Bolo
+      // zůstal uvnitř hitboxu a nemohl by se hnout (jen otáčet).
+      const spot = p.hideSpot;
       p.hidden = false;
       p.hideSpot = null;
+      if(spot){
+        // Zkusíme 4 strany v pořadí dolů, nahoru, vpravo, vlevo.
+        // Vybereme první nezablokovanou pozici.
+        const candidates = [
+          { x: spot.px + spot.w/2 - PW/2, y: spot.py + spot.h + 2 },           // pod
+          { x: spot.px + spot.w/2 - PW/2, y: spot.py - PH - 2 },               // nad
+          { x: spot.px + spot.w + 2,      y: spot.py + spot.h/2 - PH/2 },      // vpravo
+          { x: spot.px - PW - 2,          y: spot.py + spot.h/2 - PH/2 },      // vlevo
+        ];
+        for(const c of candidates){
+          if(!isBlockedAt(c.x, c.y, p.room, PW, PH)
+              && c.x >= 8 && c.x + PW <= ROOM_W - 8
+              && c.y >= 8 && c.y + PH <= ROOM_H - 8){
+            p.x = c.x;
+            p.y = c.y;
+            break;
+          }
+        }
+      }
       snd_hide();
     } else {
       const spot = findHideSpot(p.x, p.y, p.room);
